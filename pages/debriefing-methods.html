@@ -13,16 +13,17 @@
     </header>
     <main class="page">
       <section class="content-card">
-        <p data-manuscript-block></p>
-        <div class="table-scroll">
+        <div class="table-scroll" role="region" aria-label="Scrollable data table" tabindex="0">
           <table class="manuscript-table">
-            <tbody>
+            <thead>
               <tr>
-                <td data-manuscript-block>NAME</td>
-                <td data-manuscript-block>METHOD</td>
-                <td data-manuscript-block>PURPOSE</td>
-                <td data-manuscript-block>EXAMPLE SIMULATION</td>
+                <th scope="col" data-manuscript-block>NAME</th>
+                <th scope="col" data-manuscript-block>METHOD</th>
+                <th scope="col" data-manuscript-block>PURPOSE</th>
+                <th scope="col" data-manuscript-block>EXAMPLE SIMULATION</th>
               </tr>
+            </thead>
+            <tbody>
               <tr>
                 <td data-manuscript-block>Diamond1</td>
                 <td data-manuscript-block>Use a structural visual reminder (Diamond) to guide debrief. The top of the diamond is Describe, the middle is Analysis, and the bottom is Application.</td>
@@ -63,20 +64,13 @@
           </table>
         </div>
         <h2 data-manuscript-block>References</h2>
-        <p data-manuscript-block>1.Jaye P, Thomas L, Reedy G. ‘The Diamond’: a structure for simulation debrief. Clin Teach. 2015;12(3):171-175. doi:10.1111/tct.12300</p>
-        <p data-manuscript-block>
-          2. Sawyer T, Eppich W, Brett-Fleegler M, Grant V, Cheng A. More than one way to debrief: a critical review of healthcare simulation debriefing methods. Simul Healthc. 2016;11(3):209-217.
-          doi:10.1097/sih.0000000000000148
-        </p>
-        <p data-manuscript-block>
-          3.Cheng A, Eppich W, Epps C, Kolbe M, Meguerdichian M, Grant V. Embracing informed learner self-assessment during debriefing: the art of plus-delta. Adv Simul. 2021;6:22.
-          doi:10.1186/s41077-021-00173-1
-        </p>
-        <p data-manuscript-block>
-          4.Koshy K, Limb C, Gundogan B, Whitehurst K, Jafree DJ. Reflective practice in health care and how to reflect effectively. Int J Surg Oncol (N Y). 2017;2(6):e20.
-          doi:10.1097/IJ9.0000000000000020
-        </p>
-        <p data-manuscript-block>5.Bajaj K, Meguerdichian M, Thoma B, Huang S, Eppich W, Cheng A. The PEARLS healthcare debriefing tool. Acad Med. 2018;93(2):336.</p>
+        <ol class="manuscript-list references-list">
+          <li data-manuscript-block><span class="source-list-number">1.</span>Jaye P, Thomas L, Reedy G. ‘The Diamond’: a structure for simulation debrief. Clin Teach. 2015;12(3):171-175. doi:10.1111/tct.12300</li>
+          <li data-manuscript-block><span class="source-list-number">2. </span>Sawyer T, Eppich W, Brett-Fleegler M, Grant V, Cheng A. More than one way to debrief: a critical review of healthcare simulation debriefing methods. Simul Healthc. 2016;11(3):209-217. doi:10.1097/sih.0000000000000148</li>
+          <li data-manuscript-block><span class="source-list-number">3.</span>Cheng A, Eppich W, Epps C, Kolbe M, Meguerdichian M, Grant V. Embracing informed learner self-assessment during debriefing: the art of plus-delta. Adv Simul. 2021;6:22. doi:10.1186/s41077-021-00173-1</li>
+          <li data-manuscript-block><span class="source-list-number">4.</span>Koshy K, Limb C, Gundogan B, Whitehurst K, Jafree DJ. Reflective practice in health care and how to reflect effectively. Int J Surg Oncol (N Y). 2017;2(6):e20. doi:10.1097/IJ9.0000000000000020</li>
+          <li data-manuscript-block><span class="source-list-number">5.</span>Bajaj K, Meguerdichian M, Thoma B, Huang S, Eppich W, Cheng A. The PEARLS healthcare debriefing tool. Acad Med. 2018;93(2):336.</li>
+        </ol>
       </section>
     </main>
   </body>

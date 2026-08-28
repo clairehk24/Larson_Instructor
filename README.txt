@@ -6,10 +6,9 @@ Open index.html in a current desktop browser. The instructor guide does not requ
 
 CURRENT MANUSCRIPT COVERAGE
 - The instructor Introduction is built from assets/Manuscripts/L1715_Introduction.docx.
-- Instructor simulation manuscripts currently available: 1, 3, 4, 5, 6, 7, 8, 9, and 10.
+- Instructor simulation manuscripts are available for simulations 1 through 32.
 - Simulation 9 is partial and is presented only to the extent supplied in its manuscript.
 - Supporting instructor resources are available for simulations 2, 16, 17, 21, and 22.
-- Simulations without a supplied instructor manuscript display a status notice instead of student-version copy.
 - Simulation Checklist, Debriefing Methods, and Simulation Finder appear after the simulations in the navigation.
 
 REBUILD FROM MANUSCRIPTS
@@ -29,6 +28,13 @@ Run:
     python scripts/validate_manuscript_text.py
 
 The validation checks reader-facing HTML and generated Word content against the source manuscripts. It fails when wording, punctuation, capitalization, or ordering differs.
+
+VERIFY WEB ACCESSIBILITY
+Run:
+
+    python tests/accessibility_audit.py
+
+The audit checks every HTML page for WCAG 2.0 Level AA fundamentals, including document language and titles, landmarks, heading order, accessible names, image alternatives, keyboard-focusable tables, table headers, duplicate IDs, tabindex use, zoom support, and core text color contrast.
 
 ADDING A MANUSCRIPT
 1. Copy the approved L1715 Word manuscript into assets/Manuscripts using the L1715_SimNN naming pattern.

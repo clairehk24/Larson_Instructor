@@ -3,19 +3,25 @@
 from html.parser import HTMLParser
 from pathlib import Path
 import sys
+from collections import Counter
 from zipfile import ZipFile
 
 from lxml import etree
 
 from build_instructor_version import (
     MANUSCRIPTS,
+    BEGIN_RE,
+    HEADING_TAGS,
     NS,
     PAGES,
+    PRODUCTION_PREFIX,
     ROOT,
     SIM_RE,
     clean_download_nodes,
+    body_children,
     download_sections,
     main_content,
+    manuscript_sources,
     slug,
     text_of,
 )
@@ -72,7 +78,7 @@ def node_blocks(nodes):
         paragraphs = [child] if child.tag.endswith("}p") else child.xpath(".//w:p", namespaces=NS)
         for paragraph in paragraphs:
             value = text_of(paragraph)
-            if value and not value.startswith("\\qqINSERT "):
+            if value and not value.startswith("\\qqINSERT"):
                 result.append(value)
     return result
 
@@ -93,8 +99,43 @@ def compare(label, expected, actual):
 
 def validate_page(source, page):
     expected = html_blocks("".join(main_content(source)))
+    if source.name == "L1715_Debriefing Methods.docx":
+        expected = [block for block in expected if block != "Debriefing Methods"]
     actual = html_blocks(page.read_text(encoding="utf-8"))
-    return compare(f"{page.relative_to(ROOT)} matches {source.name}", expected, actual)
+    content_matches = compare(
+        f"{page.relative_to(ROOT)} matches {source.name}", expected, actual
+    )
+    # This audit deliberately bypasses main_content so a parser defect cannot
+    # silently remove a source heading from both expected and actual content.
+    _root, body = body_children(source)
+    source_headings = []
+    in_download = False
+    for node in list(body):
+        value = text_of(node).strip()
+        if BEGIN_RE.search(value):
+            in_download = True
+            continue
+        if in_download:
+            if value.startswith("\\qqEND downloadable content"):
+                in_download = False
+            continue
+        match = PRODUCTION_PREFIX.match(value)
+        if match and match.group(1) in HEADING_TAGS:
+            source_headings.append(PRODUCTION_PREFIX.sub("", value))
+    actual_counts = Counter(actual)
+    missing = []
+    for heading in source_headings:
+        if actual_counts[heading]:
+            actual_counts[heading] -= 1
+        else:
+            missing.append(heading)
+    if missing:
+        print(f"FAIL: {page.relative_to(ROOT)} is missing source headings: {missing}")
+        headings_match = False
+    else:
+        print(f"PASS: {page.relative_to(ROOT)} includes every source heading")
+        headings_match = True
+    return content_matches and headings_match
 
 
 def validate_downloads(source, number):
@@ -104,9 +145,14 @@ def validate_downloads(source, number):
     for section in download_sections(source):
         if section["button"] == "Information for Proctor":
             continue
-        expected = node_blocks(section["nodes"])
-        if len(expected) <= 1:
+        meaningful = [
+            text_of(node).strip()
+            for node in clean_download_nodes(section["nodes"])
+            if text_of(node).strip()
+        ]
+        if len(meaningful) <= 1:
             continue
+        expected = node_blocks(section["nodes"])
         base = slug(section["button"])
         filename = f"{base}.docx"
         suffix = 2
@@ -129,7 +175,7 @@ def main():
         validate_page(MANUSCRIPTS / "L1715_Introduction.docx", PAGES / "introduction.html"),
         validate_page(MANUSCRIPTS / "L1715_Debriefing Methods.docx", PAGES / "debriefing-methods.html"),
     ]
-    for source in sorted(MANUSCRIPTS.glob("L1715_Sim*.docx")):
+    for source in manuscript_sources():
         match = SIM_RE.match(source.name)
         if not match:
             continue

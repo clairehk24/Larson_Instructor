@@ -5,6 +5,7 @@
   const frame = document.getElementById("contentFrame");
   const pageTitle = document.getElementById("pageTitle");
   const search = document.getElementById("courseSearch");
+  const searchStatus = document.getElementById("searchStatus");
   const completeButton = document.getElementById("completeButton");
   const completeText = completeButton.querySelector("span");
   const progressText = document.getElementById("progressText");
@@ -15,8 +16,12 @@
   const previousLabel = document.getElementById("previousLabel");
   const nextLabel = document.getElementById("nextLabel");
   const sidebar = document.getElementById("sidebar");
+  const mainShell = document.querySelector(".main-shell");
   const menuButton = document.getElementById("menuButton");
   const mobileScrim = document.getElementById("mobileScrim");
+  const skipLink = document.querySelector(".skip-link");
+  const viewerRegion = document.getElementById("viewerRegion");
+  const mobileViewport = window.matchMedia("(max-width: 980px)");
 
   const STORAGE_KEY = "larson-instructor-completed-pages";
   const allItems = window.COURSE_NAV.flatMap(section =>
@@ -132,6 +137,10 @@
     const item = allItems[activeIndex];
     const isComplete = completed.has(item.id);
     completeButton.setAttribute("aria-pressed", String(isComplete));
+    completeButton.setAttribute(
+      "aria-label",
+      isComplete ? "Mark current page incomplete" : "Mark current page complete"
+    );
     completeText.textContent = isComplete ? "Completed" : "Mark complete";
   }
 
@@ -159,28 +168,52 @@
 
   function filterNavigation(query) {
     const normalized = query.trim().toLowerCase();
+    let resultCount = 0;
     navRoot.querySelectorAll(".nav-section").forEach(section => {
       let visibleCount = 0;
       section.querySelectorAll(".nav-link").forEach(link => {
         const visible = !normalized || link.dataset.title.toLowerCase().includes(normalized);
         link.hidden = !visible;
-        if (visible) visibleCount += 1;
+        if (visible) {
+          visibleCount += 1;
+          resultCount += 1;
+        }
       });
       section.hidden = visibleCount === 0;
       if (normalized && visibleCount) section.open = true;
     });
+    searchStatus.textContent = normalized
+      ? `${resultCount} simulation${resultCount === 1 ? "" : "s"} found.`
+      : "";
+  }
+
+  function syncMobileMenuAccessibility() {
+    const menuIsOpen = sidebar.classList.contains("is-open");
+    const sidebarIsHidden = mobileViewport.matches && !menuIsOpen;
+    const contentIsHidden = mobileViewport.matches && menuIsOpen;
+
+    sidebar.toggleAttribute("inert", sidebarIsHidden);
+    if (sidebarIsHidden) sidebar.setAttribute("aria-hidden", "true");
+    else sidebar.removeAttribute("aria-hidden");
+    mainShell.toggleAttribute("inert", contentIsHidden);
+    skipLink.toggleAttribute("inert", contentIsHidden);
   }
 
   function openMobileMenu() {
     sidebar.classList.add("is-open");
     mobileScrim.hidden = false;
     menuButton.setAttribute("aria-expanded", "true");
+    syncMobileMenuAccessibility();
+    requestAnimationFrame(() => search.focus());
   }
 
-  function closeMobileMenu() {
+  function closeMobileMenu({ restoreFocus = true } = {}) {
+    const wasOpen = sidebar.classList.contains("is-open");
     sidebar.classList.remove("is-open");
     mobileScrim.hidden = true;
     menuButton.setAttribute("aria-expanded", "false");
+    syncMobileMenuAccessibility();
+    if (wasOpen && restoreFocus && mobileViewport.matches) menuButton.focus();
   }
 
   renderNavigation();
@@ -195,4 +228,7 @@
   menuButton.addEventListener("click", () => sidebar.classList.contains("is-open") ? closeMobileMenu() : openMobileMenu());
   mobileScrim.addEventListener("click", closeMobileMenu);
   window.addEventListener("keydown", event => { if (event.key === "Escape") closeMobileMenu(); });
+  mobileViewport.addEventListener("change", () => closeMobileMenu({ restoreFocus: false }));
+  skipLink.addEventListener("click", () => requestAnimationFrame(() => viewerRegion.focus()));
+  syncMobileMenuAccessibility();
 })();

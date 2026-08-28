@@ -6,6 +6,7 @@ from copy import deepcopy
 from html import escape, unescape
 from pathlib import Path, PureWindowsPath
 import re
+from shutil import copy2
 import sys
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -13,7 +14,7 @@ from docx import Document
 from docx.oxml.ns import qn
 from lxml import etree
 
-from generate_simulation_downloads import finalize_document, write_docx
+from generate_simulation_downloads import finalize_document, stamp_footer, write_docx
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,9 +25,16 @@ NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 PRODUCTION_PREFIX = re.compile(r"^<(cn|ct|a|b|c|d|lh|tt|title|txni|tx|fc)>")
 HEADING_TAGS = {"a": "h2", "b": "h3", "c": "h4", "d": "h5", "lh": "h3", "tt": "h3", "title": "h2"}
+LIST_SECTIONS = {
+    "Learning Objectives": ("ol", "learning-objectives-list"),
+    "CAATE 2020 Standards": ("ul", "standards-list"),
+    "References": ("ol", "references-list"),
+}
+SOURCE_LIST_NUMBER_RE = re.compile(r"^(\d+\.\s*)")
 SIM_RE = re.compile(r"L1715_Sim(\d{2})")
 BEGIN_RE = re.compile(r"BEGIN downloadable content")
 BUTTON_RE = re.compile(r"Button name:\s*(.*?)(?=<title>|\\?$)")
+NOTE_END_RE = re.compile(r"xqq\\$", re.IGNORECASE)
 TITLE_OVERRIDES = {
     5: "Special Test Roulette: Upper Extremity",
     9: "Coach Education",
@@ -36,7 +44,11 @@ SUPPORTING_RESOURCES = {
         "L1715_Sim02_TS 02.01_Rowing-Basics-3.pdf",
         "L1715_Sim02_TS 02.02_Understanding Rowing.htm",
     ),
-    16: ("L1715_Sim16_Instructor Slides.pptx",),
+    16: (
+        "L1715_Sim16_Instructor Slides.pptx",
+        "L1715_Sim16_Notecards for HCP Evaluation 1.docx",
+        "L1715_Sim16_Notecards for HCP Evaluation 2.docx",
+    ),
     17: ("L1715_Sim17_Instructor Slides.pptx",),
     21: (
         "L1715_Sim21 HCP SCAT6 Rain Shoemaker.pdf",
@@ -44,6 +56,28 @@ SUPPORTING_RESOURCES = {
     ),
     22: ("L1715_Sim22 SCAT6 Rain Shoemaker 96 Hours.pdf",),
 }
+
+
+def manuscript_sources():
+    """Return the single primary instructor manuscript for each simulation."""
+    sources = {}
+    supporting_names = {
+        filename
+        for filenames in SUPPORTING_RESOURCES.values()
+        for filename in filenames
+    }
+    for path in sorted(MANUSCRIPTS.glob("L1715_Sim*.docx")):
+        match = SIM_RE.match(path.name)
+        if not match or path.name in supporting_names:
+            continue
+        number = int(match.group(1))
+        if number in sources:
+            raise ValueError(
+                f"Multiple primary manuscripts found for simulation {number}: "
+                f"{sources[number].name}, {path.name}"
+            )
+        sources[number] = path
+    return [sources[number] for number in sorted(sources)]
 
 
 def text_of(node):
@@ -114,17 +148,23 @@ def clean_download_nodes(nodes):
     for node in nodes:
         value = text_of(node).strip()
         if value.startswith("\\qqID:") or value.startswith("\\qqPSM:"):
-            in_note = not value.endswith("xqq\\")
+            in_note = not NOTE_END_RE.search(value)
             continue
         if in_note:
-            if value.endswith("xqq\\"):
+            if NOTE_END_RE.search(value):
                 in_note = False
-            continue
-        if value.startswith("\\qqINSERT "):
-            image_name = PureWindowsPath(value.removeprefix("\\qqINSERT ").strip()).stem
-            if not (ROOT / "assets" / "images" / f"{image_name}.png").exists():
                 continue
-        if value.startswith("\\qq") and not value.startswith("\\qqINSERT "):
+            # A new reader-facing block means the preceding production note
+            # was a single unclosed instruction, not a multiline note.
+            if not PRODUCTION_PREFIX.match(value):
+                continue
+            in_note = False
+        if value.startswith("\\qqINSERT"):
+            marker = re.match(r"^\\qqINSERT:?\s+(.*)$", value)
+            image_name = PureWindowsPath(marker.group(1).strip()).stem if marker else ""
+            if not image_name or not (ROOT / "assets" / "images" / f"{image_name}.png").exists():
+                continue
+        if value.startswith("\\qq") and not value.startswith("\\qqINSERT"):
             continue
         clone = deepcopy(node)
         clone_text = text_of(clone)
@@ -180,11 +220,27 @@ def write_downloads(source, sim_number):
         write_docx(source, output, document_for_nodes(source, section["nodes"]))
         finalize_document(output)
         results.append((section["button"], filename))
-    if results:
+    supporting = [
+        MANUSCRIPTS / filename
+        for filename in SUPPORTING_RESOURCES.get(sim_number, ())
+        if (MANUSCRIPTS / filename).exists()
+    ]
+    packaged_supporting = []
+    for path in supporting:
+        if path.suffix.lower() == ".docx":
+            packaged = output_dir / path.name
+            copy2(path, packaged)
+            stamp_footer(packaged)
+            packaged_supporting.append(packaged)
+        else:
+            packaged_supporting.append(path)
+    if results or supporting:
         zip_path = output_dir / "all-instructor-downloads.zip"
         with ZipFile(zip_path, "w", ZIP_DEFLATED) as archive:
             for _label, filename in results:
                 archive.write(output_dir / filename, filename)
+            for path in packaged_supporting:
+                archive.write(path, path.name)
     return results
 
 
@@ -199,14 +255,32 @@ def cell_html(cell):
 
 def table_html(node):
     rows = []
-    for row in node.findall("w:tr", NS):
+    for row_index, row in enumerate(node.findall("w:tr", NS)):
         cells = row.findall("w:tc", NS)
-        rows.append("<tr>" + "".join(f"<td data-manuscript-block>{cell_html(cell)}</td>" for cell in cells) + "</tr>")
-    return '<div class="table-scroll"><table class="manuscript-table"><tbody>' + "".join(rows) + "</tbody></table></div>"
+        if row_index == 0:
+            markup = "".join(
+                f'<th scope="col" data-manuscript-block>{cell_html(cell)}</th>'
+                for cell in cells
+            )
+        else:
+            markup = "".join(
+                f"<td data-manuscript-block>{cell_html(cell)}</td>" for cell in cells
+            )
+        rows.append("<tr>" + markup + "</tr>")
+    header = rows[0] if rows else ""
+    body_rows = "".join(rows[1:])
+    return (
+        '<div class="table-scroll" role="region" aria-label="Scrollable data table" tabindex="0">'
+        '<table class="manuscript-table"><thead>' + header + "</thead><tbody>"
+        + body_rows + "</tbody></table></div>"
+    )
 
 
 def image_for_marker(value):
-    stem = PureWindowsPath(value.removeprefix("\\qqINSERT ").strip()).stem
+    marker = re.match(r"^\\qqINSERT:?\s+(.*)$", value)
+    if not marker or not marker.group(1).strip():
+        return None
+    stem = PureWindowsPath(marker.group(1).strip()).stem
     candidate = ROOT / "assets" / "images" / f"{stem}.png"
     return candidate if candidate.exists() else None
 
@@ -216,25 +290,51 @@ def main_content(path):
     output = []
     in_download = False
     in_note = False
+    active_list = None
+
+    def close_list():
+        nonlocal active_list
+        if active_list:
+            output.append(f"</{active_list}>")
+            active_list = None
+
     for node in list(body):
         value = text_of(node).strip()
+        value = re.sub(r"^(?:PHOTO HERE\s*)+", "", value).strip()
         if BEGIN_RE.search(value):
+            close_list()
             in_download = True
+            in_note = False
             continue
         if in_download:
             if value.startswith("\\qqEND downloadable content"):
                 in_download = False
             continue
         if value.startswith("\\qqID:") or value.startswith("\\qqPSM:"):
-            in_note = not value.endswith("xqq\\")
+            in_note = not NOTE_END_RE.search(value)
             continue
         if in_note:
-            if value.endswith("xqq\\"):
+            if NOTE_END_RE.search(value):
                 in_note = False
+                continue
+            # Do not let a malformed or unclosed production note consume a
+            # subsequent manuscript section.
+            if not PRODUCTION_PREFIX.match(value):
+                continue
+            in_note = False
+        if value.startswith("\\qqINSERT"):
+            close_list()
+            image = image_for_marker(value)
+            if image:
+                output.append(
+                    '<figure class="manuscript-figure"><img src="../assets/images/'
+                    f'{escape(image.name)}" alt=""></figure>'
+                )
             continue
         if not value or value.startswith("Navigation menu/button") or value.startswith("\\qq"):
             continue
         if node.tag == qn("w:tbl"):
+            close_list()
             output.append(table_html(node))
             continue
         marker = PRODUCTION_PREFIX.match(value)
@@ -243,8 +343,30 @@ def main_content(path):
         if tag_name in ("cn", "ct"):
             continue
         html_tag = HEADING_TAGS.get(tag_name, "p")
+        if html_tag.startswith("h"):
+            close_list()
+            output.append(f"<{html_tag} data-manuscript-block>{escape(clean)}</{html_tag}>")
+            list_config = LIST_SECTIONS.get(clean)
+            if list_config:
+                active_list, list_class = list_config
+                output.append(f'<{active_list} class="manuscript-list {list_class}">')
+            continue
+        if active_list and html_tag == "p":
+            number_match = SOURCE_LIST_NUMBER_RE.match(clean)
+            if number_match:
+                prefix = number_match.group(1)
+                rendered = (
+                    f'<span class="source-list-number">{escape(prefix)}</span>'
+                    f'{escape(clean[len(prefix):])}'
+                )
+            else:
+                rendered = escape(clean)
+            output.append(f"<li data-manuscript-block>{rendered}</li>")
+            continue
+        close_list()
         css = ' class="figure-caption"' if tag_name == "fc" else ""
         output.append(f"<{html_tag}{css} data-manuscript-block>{escape(clean)}</{html_tag}>")
+    close_list()
     return output
 
 
@@ -252,7 +374,8 @@ def doc_title(path, fallback):
     for paragraph in Document(path).paragraphs:
         value = paragraph.text.strip()
         if value.startswith("<ct>"):
-            return value.removeprefix("<ct>")
+            title = re.sub(r"^Simulation \d+:?\s*", "", value.removeprefix("<ct>"))
+            return title or fallback
     return fallback
 
 
@@ -278,10 +401,28 @@ def build_manuscript_page(source, number, fallback_title):
     if current:
         cards.append('<section class="content-card">' + "".join(current) + "</section>")
     downloads = write_downloads(source, number)
-    if downloads:
-        links = ['<a class="download-card featured" href="../assets/downloads/simulation-{0}/all-instructor-downloads.zip" download><span class="file-icon">ZIP</span><span><strong>All Instructor Downloads</strong><small>ZIP archive</small></span><span class="download-arrow">↓</span></a>'.format(number)]
+    supporting = [
+        filename
+        for filename in SUPPORTING_RESOURCES.get(number, ())
+        if (MANUSCRIPTS / filename).exists()
+    ]
+    if downloads or supporting:
+        links = ['<a class="download-card featured" href="../assets/downloads/simulation-{0}/all-instructor-downloads.zip" download><span class="file-icon" aria-hidden="true">ZIP</span><span><strong>All Instructor Downloads</strong><small>ZIP archive</small></span><span class="download-arrow" aria-hidden="true">↓</span></a>'.format(number)]
         for label, filename in downloads:
-            links.append(f'<a class="download-card" href="../assets/downloads/simulation-{number}/{escape(filename)}" download><span class="file-icon">DOCX</span><span><strong>{escape(label)}</strong><small>Word document</small></span><span class="download-arrow">↓</span></a>')
+            links.append(f'<a class="download-card" href="../assets/downloads/simulation-{number}/{escape(filename)}" download><span class="file-icon" aria-hidden="true">DOCX</span><span><strong>{escape(label)}</strong><small>Word document</small></span><span class="download-arrow" aria-hidden="true">↓</span></a>')
+        for filename in supporting:
+            extension = Path(filename).suffix.removeprefix(".").upper()
+            label = re.sub(r"^L1715_Sim\d{2}[_ ]*", "", Path(filename).stem).replace("_", " ")
+            href = (
+                f"../assets/downloads/simulation-{number}/{filename}"
+                if extension == "DOCX"
+                else f"../assets/Manuscripts/{filename}"
+            )
+            links.append(
+                f'<a class="download-card" href="{escape(href)}" download>'
+                f'<span class="file-icon" aria-hidden="true">{escape(extension)}</span><span><strong>{escape(label)}</strong>'
+                f'<small>Supporting instructor resource</small></span><span class="download-arrow" aria-hidden="true">&darr;</span></a>'
+            )
         cards.append('<section class="content-card"><h2>Instructor Downloads</h2><div class="download-grid activity-grid">' + "".join(links) + "</div></section>")
     if number == 9:
         cards.insert(0, '<section class="content-card tint"><h2>Instructor Manuscript Status</h2><p>This is a partial instructor manuscript.</p></section>')
@@ -292,6 +433,7 @@ def build_manuscript_page(source, number, fallback_title):
 
 def build_introduction():
     source = MANUSCRIPTS / "L1715_Introduction.docx"
+    stamp_footer(DOWNLOADS / "copyright-page-placeholder.docx")
     page_path = PAGES / "introduction.html"
     try:
         blocks = main_content(source)
@@ -364,12 +506,17 @@ def build_introduction():
 
 def build_debriefing():
     source = MANUSCRIPTS / "L1715_Debriefing Methods.docx"
-    content = '<section class="content-card">' + "".join(main_content(source)) + "</section>"
+    blocks = [
+        block
+        for block in main_content(source)
+        if block != "<p data-manuscript-block>Debriefing Methods</p>"
+    ]
+    content = '<section class="content-card">' + "".join(blocks) + "</section>"
     (PAGES / "debriefing-methods.html").write_text(page_shell("Debriefing Methods", "Instructor resource", content), encoding="utf-8")
 
 
 def resource_page(filename, title, label):
-    content = f'<section class="content-card"><div class="download-grid"><a class="download-card featured" href="../assets/Manuscripts/{escape(filename)}" download><span class="file-icon">{escape(label)}</span><span><strong>{escape(title)}</strong><small>{escape(filename)}</small></span><span class="download-arrow">↓</span></a></div></section>'
+    content = f'<section class="content-card"><div class="download-grid"><a class="download-card featured" href="../assets/Manuscripts/{escape(filename)}" download><span class="file-icon" aria-hidden="true">{escape(label)}</span><span><strong>{escape(title)}</strong><small>{escape(filename)}</small></span><span class="download-arrow" aria-hidden="true">↓</span></a></div></section>'
     return page_shell(title, "Instructor resource", content)
 
 
@@ -404,8 +551,8 @@ def build_pending_pages(available):
             extension = Path(filename).suffix.removeprefix(".").upper()
             links.append(
                 f'<a class="download-card" href="../assets/Manuscripts/{escape(filename)}" download>'
-                f'<span class="file-icon">{escape(extension)}</span><span><strong>{escape(filename)}</strong>'
-                f'<small>Supporting instructor resource</small></span><span class="download-arrow">↓</span></a>'
+                f'<span class="file-icon" aria-hidden="true">{escape(extension)}</span><span><strong>{escape(filename)}</strong>'
+                f'<small>Supporting instructor resource</small></span><span class="download-arrow" aria-hidden="true">↓</span></a>'
             )
         resource_section = ""
         if links:
@@ -418,18 +565,19 @@ def build_pending_pages(available):
 
 def main():
     requested = {int(arg) for arg in sys.argv[1:]}
+    titles = navigation_titles()
     build_introduction()
     build_debriefing()
     build_resource_pages()
     built = []
-    for source in sorted(MANUSCRIPTS.glob("L1715_Sim*.docx")):
+    for source in manuscript_sources():
         match = SIM_RE.match(source.name)
         if not match:
             continue
         number = int(match.group(1))
         if requested and number not in requested:
             continue
-        fallback = TITLE_OVERRIDES.get(number, f"Simulation {number}")
+        fallback = TITLE_OVERRIDES.get(number, titles.get(number, f"Simulation {number}"))
         title, count = build_manuscript_page(source, number, fallback)
         built.append(number)
         print(f"BUILT: simulation-{number} ({title}; {count} downloads)")

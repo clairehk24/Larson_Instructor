@@ -3,6 +3,7 @@
 from copy import deepcopy
 from pathlib import Path
 from pathlib import PureWindowsPath
+import re
 import sys
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -20,7 +21,7 @@ IMAGE_DIR = ROOT / "assets" / "images"
 WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS = {"w": WORD_NS}
 FOOTER_PREFIX = "From J.M. Larson and H.L. Stedge, "
-FOOTER_TITLE = "Clinical Simulations for the Athletic Trainer HKPropel Access"
+FOOTER_TITLE = "Clinical Simulations for the Athletic Trainer Instructor Guide"
 FOOTER_SUFFIX = " (Human Kinetics, 2027)."
 FOOTER_TEXT = FOOTER_PREFIX + FOOTER_TITLE + FOOTER_SUFFIX
 FOOTER_SIZE = Pt(9)
@@ -595,10 +596,13 @@ def write_docx(source_path, output_path, document_xml):
 
 def insert_supplied_images(document):
     for paragraph in document.paragraphs:
-        marker = paragraph.text.strip()
-        if not marker.startswith("\\qqINSERT "):
+        # Production paths can be stored in nested Word text boxes, which are
+        # included in the XML text but omitted by python-docx's paragraph.text.
+        marker = "".join(paragraph._p.xpath(".//w:t/text()")).strip()
+        match = re.match(r"^\\qqINSERT:?\s+(.*)$", marker)
+        if not match:
             continue
-        source_name = PureWindowsPath(marker.removeprefix("\\qqINSERT ").strip()).stem
+        source_name = PureWindowsPath(match.group(1).strip()).stem
         image_path = IMAGE_DIR / f"{source_name}.png"
         if not image_path.exists():
             raise FileNotFoundError(
@@ -704,21 +708,7 @@ def apply_required_heading_size(document):
                     set_run_size(run_element, 40)
 
 
-def finalize_document(output_path):
-    document = Document(output_path)
-    insert_supplied_images(document)
-    title_paragraph = next(paragraph for paragraph in document.paragraphs if paragraph.text)
-    try:
-        heading_style = document.styles["Heading 1"]
-    except KeyError:
-        heading_style = document.styles.add_style("Heading 1", WD_STYLE_TYPE.PARAGRAPH)
-        heading_style.base_style = document.styles["Normal"]
-        heading_style.font.size = Pt(20)
-        heading_style.font.color.rgb = RGBColor(0x0F, 0x47, 0x61)
-        heading_style.paragraph_format.space_before = Pt(18)
-        heading_style.paragraph_format.space_after = Pt(4)
-        heading_style.paragraph_format.keep_with_next = True
-    title_paragraph.style = heading_style
+def apply_required_footer(document):
     for section in document.sections:
         paragraph = section.footer.paragraphs[0]
         paragraph.clear()
@@ -734,6 +724,30 @@ def finalize_document(output_path):
         for run in (prefix_run, title_run, suffix_run):
             run.font.name = REQUIRED_FONT
             run.font.size = FOOTER_SIZE
+
+
+def stamp_footer(output_path):
+    document = Document(output_path)
+    apply_required_footer(document)
+    document.save(output_path)
+
+
+def finalize_document(output_path):
+    document = Document(output_path)
+    insert_supplied_images(document)
+    title_paragraph = next(paragraph for paragraph in document.paragraphs if paragraph.text)
+    try:
+        heading_style = document.styles["Heading 1"]
+    except KeyError:
+        heading_style = document.styles.add_style("Heading 1", WD_STYLE_TYPE.PARAGRAPH)
+        heading_style.base_style = document.styles["Normal"]
+        heading_style.font.size = Pt(20)
+        heading_style.font.color.rgb = RGBColor(0x0F, 0x47, 0x61)
+        heading_style.paragraph_format.space_before = Pt(18)
+        heading_style.paragraph_format.space_after = Pt(4)
+        heading_style.paragraph_format.keep_with_next = True
+    title_paragraph.style = heading_style
+    apply_required_footer(document)
     apply_required_font(document)
     apply_required_heading_size(document)
     document.save(output_path)
