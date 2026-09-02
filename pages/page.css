@@ -72,8 +72,9 @@ a:focus-visible, button:focus-visible, [tabindex="0"]:focus-visible { outline: 3
 .download-card.resource-pending { opacity: .72; cursor: not-allowed; }
 .download-card.resource-pending:hover { transform: none; border-color: var(--line); box-shadow: none; }
 .file-icon { width: 46px; height: 46px; display: grid; place-items: center; border-radius: 12px; color: var(--accent-dark); background: var(--accent-soft); font: 900 .67rem/1 var(--font-ui); }
+.download-card > span:nth-child(2) { min-width: 0; }
 .download-card strong { display: block; color: var(--navy); font-size: .92rem; line-height: 1.25; }
-.download-card small { display: block; margin-top: 5px; color: var(--muted); font: 700 .72rem/1.2 var(--font-ui); }
+.download-card small { display: block; margin-top: 5px; color: var(--muted); font: 700 .72rem/1.2 var(--font-ui); overflow-wrap: anywhere; }
 .download-arrow { color: var(--accent); font-size: 1.35rem; }
 .download-card.featured { grid-column: 1 / -1; border-color: #efbc95; background: var(--accent-soft); }
 .prototype-note { display: flex; gap: 14px; align-items: flex-start; padding: 18px 20px; border: 1px dashed #f0aa75; border-radius: 14px; color: #6b3b18; background: #fff8f2; }

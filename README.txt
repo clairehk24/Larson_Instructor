@@ -9,7 +9,8 @@ CURRENT MANUSCRIPT COVERAGE
 - Instructor simulation manuscripts are available for simulations 1 through 32.
 - Simulation 9 is partial and is presented only to the extent supplied in its manuscript.
 - Supporting instructor resources are available for simulations 2, 16, 17, 21, and 22.
-- Simulation Checklist, Debriefing Methods, and Simulation Finder appear after the simulations in the navigation.
+- Simulation Checklist, Debriefing Methods, Simulation Finder, and Simulation Quiz appear after the simulations in the navigation.
+- Simulation Quiz provides the supplied quiz packages, answer keys, and copyright document from assets/Simulation Quizzes.
 
 REBUILD FROM MANUSCRIPTS
 Run:

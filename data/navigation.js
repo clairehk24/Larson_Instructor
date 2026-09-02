@@ -65,5 +65,12 @@ window.COURSE_NAV = [
     items: [
       { id: "simulation-finder", title: "Simulation Finder", path: "pages/simulation-finder.html" }
     ]
+  },
+  {
+    section: "Simulation Quiz",
+    direct: true,
+    items: [
+      { id: "simulation-quiz", title: "Simulation Quiz", path: "pages/simulation-quiz.html" }
+    ]
   }
 ];
