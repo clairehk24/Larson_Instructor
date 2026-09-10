@@ -23,6 +23,7 @@ PAGES = ROOT / "pages"
 DOWNLOADS = ROOT / "assets" / "downloads"
 NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 PRODUCTION_PREFIX = re.compile(r"^<(cn|ct|a|b|c|d|lh|tt|title|txni|tx|fc)>")
 HEADING_TAGS = {"a": "h2", "b": "h3", "c": "h4", "d": "h5", "lh": "h3", "tt": "h3", "title": "h2"}
 LIST_SECTIONS = {
@@ -97,10 +98,180 @@ def remove_prefix(node, prefix):
         remaining = remaining[count:]
 
 
+def remove_suffix(node, suffix):
+    remaining = suffix
+    for text_node in reversed(node.xpath(".//w:t", namespaces=NS)):
+        value = text_node.text or ""
+        if not remaining:
+            break
+        count = min(len(value), len(remaining))
+        if value[-count:] != remaining[-count:]:
+            return
+        text_node.text = value[:-count] if count else value
+        remaining = remaining[:-count]
+
+
+def prepare_reader_node(node):
+    """Clone a manuscript block and remove production-only prefixes and edge space."""
+    clone = deepcopy(node)
+    value = text_of(clone)
+    leading = re.match(r"^\s*", value).group(0)
+    if leading:
+        remove_prefix(clone, leading)
+    value = text_of(clone)
+    photo_prefix = re.match(r"^(?:PHOTO HERE\s*)+", value)
+    if photo_prefix:
+        remove_prefix(clone, photo_prefix.group(0))
+    value = text_of(clone)
+    marker = PRODUCTION_PREFIX.match(value)
+    if marker:
+        remove_prefix(clone, marker.group(0))
+    value = text_of(clone)
+    trailing = re.search(r"\s*$", value).group(0)
+    if trailing:
+        remove_suffix(clone, trailing)
+    return clone
+
+
 def body_children(path):
     with ZipFile(path) as archive:
         root = etree.fromstring(archive.read("word/document.xml"))
     return root, root.find("w:body", NS)
+
+
+def document_formatting(path):
+    """Load hyperlink targets and effective character-style properties."""
+    with ZipFile(path) as archive:
+        relationships = {}
+        rels_name = "word/_rels/document.xml.rels"
+        if rels_name in archive.namelist():
+            rels_root = etree.fromstring(archive.read(rels_name))
+            relationships = {
+                relation.get("Id"): relation.get("Target")
+                for relation in rels_root
+                if relation.get("Id") and relation.get("Target")
+            }
+
+        raw_styles = {}
+        if "word/styles.xml" in archive.namelist():
+            styles_root = etree.fromstring(archive.read("word/styles.xml"))
+            for style in styles_root.findall("w:style", NS):
+                identifier = style.get(qn("w:styleId"))
+                if not identifier:
+                    continue
+                based_on = style.find("w:basedOn", NS)
+                raw_styles[identifier] = {
+                    "based_on": based_on.get(qn("w:val")) if based_on is not None else None,
+                    "properties": formatting_properties(style.find("w:rPr", NS)),
+                }
+
+    resolved = {}
+
+    def resolve(identifier, seen=None):
+        if identifier in resolved:
+            return resolved[identifier]
+        if identifier not in raw_styles:
+            return {}
+        seen = set() if seen is None else seen
+        if identifier in seen:
+            return {}
+        seen.add(identifier)
+        entry = raw_styles[identifier]
+        properties = dict(resolve(entry["based_on"], seen)) if entry["based_on"] else {}
+        properties.update(entry["properties"])
+        resolved[identifier] = properties
+        return properties
+
+    for identifier in raw_styles:
+        resolve(identifier)
+    return relationships, resolved
+
+
+def formatting_properties(run_properties):
+    if run_properties is None:
+        return {}
+    result = {}
+    for name in ("b", "i", "strike", "caps", "smallCaps"):
+        element = run_properties.find(f"w:{name}", NS)
+        if element is not None:
+            result[name] = element.get(qn("w:val"), "1").lower() not in {
+                "0", "false", "off", "none"
+            }
+    underline = run_properties.find("w:u", NS)
+    if underline is not None:
+        result["u"] = underline.get(qn("w:val"), "single").lower() not in {
+            "0", "false", "off", "none"
+        }
+    vertical = run_properties.find("w:vertAlign", NS)
+    if vertical is not None:
+        result["vertAlign"] = vertical.get(qn("w:val"), "baseline")
+    return result
+
+
+def effective_run_properties(run, styles):
+    run_properties = run.find("w:rPr", NS)
+    result = {}
+    if run_properties is not None:
+        style = run_properties.find("w:rStyle", NS)
+        if style is not None:
+            result.update(styles.get(style.get(qn("w:val")), {}))
+        result.update(formatting_properties(run_properties))
+    return result
+
+
+def run_html(run, styles):
+    parts = []
+    for child in run:
+        if child.tag == qn("w:t"):
+            parts.append(escape(child.text or ""))
+        elif child.tag in {qn("w:br"), qn("w:cr")}:
+            parts.append("<br>")
+        elif child.tag == qn("w:tab"):
+            parts.append('<span class="manuscript-tab" aria-hidden="true"></span>')
+    rendered = "".join(parts)
+    if not rendered:
+        return ""
+    properties = effective_run_properties(run, styles)
+    wrappers = []
+    if properties.get("b"):
+        wrappers.append("strong")
+    if properties.get("i"):
+        wrappers.append("em")
+    if properties.get("u"):
+        wrappers.append("u")
+    if properties.get("strike"):
+        wrappers.append("s")
+    if properties.get("vertAlign") in {"superscript", "subscript"}:
+        wrappers.append("sup" if properties["vertAlign"] == "superscript" else "sub")
+    for tag in reversed(wrappers):
+        rendered = f"<{tag}>{rendered}</{tag}>"
+    if properties.get("caps"):
+        rendered = f'<span class="manuscript-caps">{rendered}</span>'
+    if properties.get("smallCaps"):
+        rendered = f'<span class="manuscript-small-caps">{rendered}</span>'
+    return rendered
+
+
+def inline_html(node, relationships, styles):
+    def render_children(parent):
+        output = []
+        for child in parent:
+            if child.tag == qn("w:r"):
+                output.append(run_html(child, styles))
+            elif child.tag == qn("w:hyperlink"):
+                content = render_children(child)
+                relation_id = child.get(R + "id")
+                target = relationships.get(relation_id)
+                anchor = child.get(qn("w:anchor"))
+                href = target or (f"#{anchor}" if anchor else "")
+                output.append(
+                    f'<a href="{escape(href, quote=True)}">{content}</a>' if href else content
+                )
+            elif child.tag not in {qn("w:del"), qn("w:instrText")}:
+                output.append(render_children(child))
+        return "".join(output)
+
+    return render_children(node)
 
 
 def next_nonempty_text(children, start):
@@ -196,9 +367,7 @@ def slug(value):
     return value[:90] or "instructor-download"
 
 
-def write_downloads(source, sim_number):
-    output_dir = DOWNLOADS / f"simulation-{sim_number}"
-    output_dir.mkdir(parents=True, exist_ok=True)
+def download_specs(source):
     results = []
     used = set()
     for section in download_sections(source):
@@ -216,10 +385,23 @@ def write_downloads(source, sim_number):
             filename = f"{base}-{suffix}.docx"
             suffix += 1
         used.add(filename)
+        results.append((section, section["button"], filename))
+    return results
+
+
+def download_manifest(source):
+    return [(label, filename) for _section, label, filename in download_specs(source)]
+
+
+def write_downloads(source, sim_number):
+    output_dir = DOWNLOADS / f"simulation-{sim_number}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results = []
+    for section, label, filename in download_specs(source):
         output = output_dir / filename
         write_docx(source, output, document_for_nodes(source, section["nodes"]))
         finalize_document(output)
-        results.append((section["button"], filename))
+        results.append((label, filename))
     supporting = [
         MANUSCRIPTS / filename
         for filename in SUPPORTING_RESOURCES.get(sim_number, ())
@@ -244,27 +426,29 @@ def write_downloads(source, sim_number):
     return results
 
 
-def cell_html(cell):
+def cell_html(cell, relationships, styles):
     parts = []
     for paragraph in cell.findall("w:p", NS):
-        value = text_of(paragraph)
+        clean_paragraph = prepare_reader_node(paragraph)
+        value = text_of(clean_paragraph)
         if value:
-            parts.append(escape(PRODUCTION_PREFIX.sub("", value)))
+            parts.append(inline_html(clean_paragraph, relationships, styles))
     return "<br>".join(parts)
 
 
-def table_html(node):
+def table_html(node, relationships, styles):
     rows = []
     for row_index, row in enumerate(node.findall("w:tr", NS)):
         cells = row.findall("w:tc", NS)
         if row_index == 0:
             markup = "".join(
-                f'<th scope="col" data-manuscript-block>{cell_html(cell)}</th>'
+                f'<th scope="col" data-manuscript-block>{cell_html(cell, relationships, styles)}</th>'
                 for cell in cells
             )
         else:
             markup = "".join(
-                f"<td data-manuscript-block>{cell_html(cell)}</td>" for cell in cells
+                f"<td data-manuscript-block>{cell_html(cell, relationships, styles)}</td>"
+                for cell in cells
             )
         rows.append("<tr>" + markup + "</tr>")
     header = rows[0] if rows else ""
@@ -287,6 +471,7 @@ def image_for_marker(value):
 
 def main_content(path):
     _root, body = body_children(path)
+    relationships, styles = document_formatting(path)
     output = []
     in_download = False
     in_note = False
@@ -335,17 +520,19 @@ def main_content(path):
             continue
         if node.tag == qn("w:tbl"):
             close_list()
-            output.append(table_html(node))
+            output.append(table_html(node, relationships, styles))
             continue
+        clean_node = prepare_reader_node(node)
+        clean = text_of(clean_node)
         marker = PRODUCTION_PREFIX.match(value)
         tag_name = marker.group(1) if marker else ""
-        clean = PRODUCTION_PREFIX.sub("", value)
         if tag_name in ("cn", "ct"):
             continue
         html_tag = HEADING_TAGS.get(tag_name, "p")
         if html_tag.startswith("h"):
             close_list()
-            output.append(f"<{html_tag} data-manuscript-block>{escape(clean)}</{html_tag}>")
+            rendered = inline_html(clean_node, relationships, styles)
+            output.append(f"<{html_tag} data-manuscript-block>{rendered}</{html_tag}>")
             list_config = LIST_SECTIONS.get(clean)
             if list_config:
                 active_list, list_class = list_config
@@ -355,17 +542,19 @@ def main_content(path):
             number_match = SOURCE_LIST_NUMBER_RE.match(clean)
             if number_match:
                 prefix = number_match.group(1)
+                remove_prefix(clean_node, prefix)
                 rendered = (
                     f'<span class="source-list-number">{escape(prefix)}</span>'
-                    f'{escape(clean[len(prefix):])}'
+                    f'{inline_html(clean_node, relationships, styles)}'
                 )
             else:
-                rendered = escape(clean)
+                rendered = inline_html(clean_node, relationships, styles)
             output.append(f"<li data-manuscript-block>{rendered}</li>")
             continue
         close_list()
         css = ' class="figure-caption"' if tag_name == "fc" else ""
-        output.append(f"<{html_tag}{css} data-manuscript-block>{escape(clean)}</{html_tag}>")
+        rendered = inline_html(clean_node, relationships, styles)
+        output.append(f"<{html_tag}{css} data-manuscript-block>{rendered}</{html_tag}>")
     close_list()
     return output
 
@@ -388,7 +577,7 @@ def page_shell(title, kicker, content):
 '''
 
 
-def build_manuscript_page(source, number, fallback_title):
+def build_manuscript_page(source, number, fallback_title, write_download_assets=True):
     title = doc_title(source, fallback_title)
     blocks = main_content(source)
     cards = []
@@ -400,7 +589,11 @@ def build_manuscript_page(source, number, fallback_title):
         current.append(block)
     if current:
         cards.append('<section class="content-card">' + "".join(current) + "</section>")
-    downloads = write_downloads(source, number)
+    downloads = (
+        write_downloads(source, number)
+        if write_download_assets
+        else download_manifest(source)
+    )
     supporting = [
         filename
         for filename in SUPPORTING_RESOURCES.get(number, ())
@@ -431,9 +624,10 @@ def build_manuscript_page(source, number, fallback_title):
     return title, len(downloads)
 
 
-def build_introduction():
+def build_introduction(write_download_assets=True):
     source = MANUSCRIPTS / "L1715_Introduction.docx"
-    stamp_footer(DOWNLOADS / "copyright-page-placeholder.docx")
+    if write_download_assets:
+        stamp_footer(DOWNLOADS / "copyright-page-placeholder.docx")
     page_path = PAGES / "introduction.html"
     try:
         blocks = main_content(source)
@@ -509,7 +703,7 @@ def build_debriefing():
     blocks = [
         block
         for block in main_content(source)
-        if block != "<p data-manuscript-block>Debriefing Methods</p>"
+        if unescape(re.sub(r"<[^>]+>", "", block)) != "Debriefing Methods"
     ]
     content = '<section class="content-card">' + "".join(blocks) + "</section>"
     (PAGES / "debriefing-methods.html").write_text(page_shell("Debriefing Methods", "Instructor resource", content), encoding="utf-8")
@@ -564,9 +758,10 @@ def build_pending_pages(available):
 
 
 def main():
-    requested = {int(arg) for arg in sys.argv[1:]}
+    pages_only = "--pages-only" in sys.argv[1:]
+    requested = {int(arg) for arg in sys.argv[1:] if arg != "--pages-only"}
     titles = navigation_titles()
-    build_introduction()
+    build_introduction(write_download_assets=not pages_only)
     build_debriefing()
     build_resource_pages()
     built = []
@@ -578,7 +773,9 @@ def main():
         if requested and number not in requested:
             continue
         fallback = TITLE_OVERRIDES.get(number, titles.get(number, f"Simulation {number}"))
-        title, count = build_manuscript_page(source, number, fallback)
+        title, count = build_manuscript_page(
+            source, number, fallback, write_download_assets=not pages_only
+        )
         built.append(number)
         print(f"BUILT: simulation-{number} ({title}; {count} downloads)")
     if not requested:
