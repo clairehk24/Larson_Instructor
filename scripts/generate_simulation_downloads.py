@@ -27,6 +27,63 @@ FOOTER_TEXT = FOOTER_PREFIX + FOOTER_TITLE + FOOTER_SUFFIX
 FOOTER_SIZE = Pt(9)
 REQUIRED_FONT = "Aptos"
 REQUIRED_HEADING_SIZE = Pt(20)
+REVISION_PROPERTY_TAGS = (
+    "pPrChange",
+    "rPrChange",
+    "sectPrChange",
+    "tblPrChange",
+    "tblGridChange",
+    "trPrChange",
+    "tcPrChange",
+    "numPrChange",
+)
+REVISION_RANGE_MARKER_TAGS = (
+    "moveFromRangeStart",
+    "moveFromRangeEnd",
+    "moveToRangeStart",
+    "moveToRangeEnd",
+    "customXmlInsRangeStart",
+    "customXmlInsRangeEnd",
+    "customXmlDelRangeStart",
+    "customXmlDelRangeEnd",
+)
+
+
+def accept_tracked_changes_xml(payload, disable_tracking=False):
+    """Return OOXML with content and formatting revisions accepted."""
+    root = etree.fromstring(payload)
+    for tag, keep in (
+        ("moveTo", True),
+        ("moveFrom", False),
+        ("ins", True),
+        ("del", False),
+    ):
+        for element in reversed(root.xpath(f".//w:{tag}", namespaces=NS)):
+            parent = element.getparent()
+            if parent is None:
+                continue
+            index = parent.index(element)
+            parent.remove(element)
+            if keep:
+                for offset, child in enumerate(list(element)):
+                    parent.insert(index + offset, child)
+    # Property-change elements store the pre-revision formatting. Accepting the
+    # revision keeps the surrounding current properties and drops that history.
+    for tag in REVISION_PROPERTY_TAGS + REVISION_RANGE_MARKER_TAGS:
+        for element in reversed(root.xpath(f".//w:{tag}", namespaces=NS)):
+            parent = element.getparent()
+            if parent is not None:
+                parent.remove(element)
+    if disable_tracking:
+        for element in root.xpath(".//w:trackRevisions", namespaces=NS):
+            parent = element.getparent()
+            if parent is not None:
+                parent.remove(element)
+    return etree.tostring(
+        root, xml_declaration=True, encoding="UTF-8", standalone=True
+    )
+
+
 SIMULATIONS = (
     {
         "id": "simulation-1",
@@ -591,11 +648,16 @@ def write_docx(source_path, output_path, document_xml):
     with ZipFile(source_path) as source, ZipFile(output_path, "w", ZIP_DEFLATED) as output:
         for item in source.infolist():
             payload = document_xml if item.filename == "word/document.xml" else source.read(item.filename)
+            if item.filename.startswith("word/") and item.filename.endswith(".xml"):
+                payload = accept_tracked_changes_xml(
+                    payload, disable_tracking=item.filename == "word/settings.xml"
+                )
             output.writestr(item, payload)
 
 
 def insert_supplied_images(document):
-    for paragraph in document.paragraphs:
+    paragraphs = document.paragraphs
+    for paragraph_index, paragraph in enumerate(paragraphs):
         # Production paths can be stored in nested Word text boxes, which are
         # included in the XML text but omitted by python-docx's paragraph.text.
         marker = "".join(paragraph._p.xpath(".//w:t/text()")).strip()
@@ -603,10 +665,19 @@ def insert_supplied_images(document):
         if not match:
             continue
         source_name = PureWindowsPath(match.group(1).strip()).stem
-        image_path = IMAGE_DIR / f"{source_name}.png"
-        if not image_path.exists():
+        optimized_dir = IMAGE_DIR / "docx"
+        image_path = next(
+            (
+                candidate
+                for directory in (optimized_dir, IMAGE_DIR)
+                for suffix in (".png", ".jpg", ".jpeg")
+                if (candidate := directory / f"{source_name}{suffix}").exists()
+            ),
+            None,
+        )
+        if image_path is None:
             raise FileNotFoundError(
-                f"No supplied PNG matches image marker {source_name!r}: {image_path}"
+                f"No supplied image matches marker {source_name!r} in {IMAGE_DIR}"
             )
 
         section = document.sections[0]
@@ -614,8 +685,20 @@ def insert_supplied_images(document):
         paragraph.clear()
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
         picture = paragraph.add_run().add_picture(str(image_path))
+        caption = next(
+            (
+                candidate.text.strip()
+                for candidate in paragraphs[paragraph_index + 1:paragraph_index + 3]
+                if candidate.text.strip().lower().startswith("figure")
+            ),
+            f"Clinical reference image {source_name}",
+        )
+        picture._inline.docPr.set("descr", caption)
+        paragraph.paragraph_format.keep_with_next = True
+        if paragraph_index + 1 < len(paragraphs):
+            paragraphs[paragraph_index + 1].paragraph_format.keep_with_next = True
         max_width = min(available_width, Inches(6.5))
-        max_height = Inches(7.25)
+        max_height = Inches(6.0)
         scale = min(max_width / picture.width, max_height / picture.height, 1)
         picture.width = int(picture.width * scale)
         picture.height = int(picture.height * scale)

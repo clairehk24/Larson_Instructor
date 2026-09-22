@@ -10,11 +10,15 @@ from shutil import copy2
 import sys
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from docx import Document
 from docx.oxml.ns import qn
 from lxml import etree
 
-from generate_simulation_downloads import finalize_document, stamp_footer, write_docx
+from generate_simulation_downloads import (
+    accept_tracked_changes_xml,
+    finalize_document,
+    stamp_footer,
+    write_docx,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,11 +35,45 @@ LIST_SECTIONS = {
     "CAATE 2020 Standards": ("ul", "standards-list"),
     "References": ("ol", "references-list"),
 }
+INLINE_NUMBERED_ITEMS = {
+    17: frozenset(
+        {
+            "Set the stage",
+            "Focus the discussion",
+            "Establish a common base",
+            "Facilitate with skill",
+            "Maintain civility and charity",
+            "Encourage reflection and make the connection",
+        }
+    ),
+    31: frozenset(
+        {
+            "Invite individuals familiar with athletics: faculty, graduate students, athletic trainers (ATs), clinical preceptors, and so on. These individuals may offer meaningful insights and relevant questions;",
+            "have students adopt roles and ask questions of their peers (they create questions as part of presimulation Activity 4);",
+            "use Embedded Personnel (EPs) to portray specific roles; or",
+            "any combination of these approaches.",
+        }
+    ),
+}
+SIMULATION_LINKS = {
+    17: (
+        "https://teaching.uoregon.edu/sites/default/files/2021-04/strategies-for-engaging-with-difficult-topics-strong-emotions-and-challenging-moments-in-the-classroom.pdf",
+    ),
+}
+PAGE_TEXT_REPLACEMENTS = {
+    29: {
+        "other AT.’": "other AT.",
+    },
+}
+FORCED_TOP_LEVEL_HEADINGS = {
+    22: frozenset({"Standardized Patient Information"}),
+}
 SOURCE_LIST_NUMBER_RE = re.compile(r"^(\d+\.\s*)")
 SIM_RE = re.compile(r"L1715_Sim(\d{2})")
 BEGIN_RE = re.compile(r"BEGIN downloadable content")
 BUTTON_RE = re.compile(r"Button name:\s*(.*?)(?=<title>|\\?$)")
 NOTE_END_RE = re.compile(r"xqq\\$", re.IGNORECASE)
+PAGE_BREAK_MARKER_RE = re.compile(r"^\\qqStart new page", re.IGNORECASE)
 TITLE_OVERRIDES = {
     5: "Special Test Roulette: Upper Extremity",
     9: "Coach Education",
@@ -56,6 +94,19 @@ SUPPORTING_RESOURCES = {
         "L1715_Sim21 SP SCAT6 Rain Shoemaker.pdf",
     ),
     22: ("L1715_Sim22 SCAT6 Rain Shoemaker 96 Hours.pdf",),
+}
+SUPPORTING_OUTPUT_NAMES = {
+    "L1715_Sim16_Notecards for HCP Evaluation 1.docx": "Sim16_Notecards for HCP Evaluation 1.docx",
+    "L1715_Sim16_Notecards for HCP Evaluation 2.docx": "Sim16_Notecards for HCP Evaluation 2.docx",
+    "L1715_Sim22 SCAT6 Rain Shoemaker 96 Hours.pdf": "Sim22 SCAT6 Rain Shoemaker 96 Hours.pdf",
+}
+LEGACY_DOWNLOAD_NAMES = {
+    22: {
+        "scat6-rain-shoemaker-96-hours.pdf": "Sim22 SCAT6 Rain Shoemaker 96 Hours.pdf",
+    },
+}
+ADDITIONAL_DOWNLOADS = {
+    15: (("Rubric: Mountain Biking", "Rubric-mountain-biking.docx"),),
 }
 
 
@@ -135,8 +186,19 @@ def prepare_reader_node(node):
 
 def body_children(path):
     with ZipFile(path) as archive:
-        root = etree.fromstring(archive.read("word/document.xml"))
+        root = etree.fromstring(
+            accept_tracked_changes_xml(archive.read("word/document.xml"))
+        )
     return root, root.find("w:body", NS)
+
+
+def body_blocks(parent):
+    """Yield block-level content, including blocks inside Word content controls."""
+    for child in parent:
+        if child.tag in {qn("w:p"), qn("w:tbl"), qn("w:sectPr")}:
+            yield child
+        elif child.tag in {qn("w:sdt"), qn("w:sdtContent"), qn("w:customXml")}:
+            yield from body_blocks(child)
 
 
 def document_formatting(path):
@@ -284,7 +346,7 @@ def next_nonempty_text(children, start):
 
 def download_sections(path):
     _root, body = body_children(path)
-    children = list(body)
+    children = list(body_blocks(body))
     sections = []
     for index, node in enumerate(children):
         marker = text_of(node).strip()
@@ -301,11 +363,21 @@ def download_sections(path):
             inline = deepcopy(node)
             remove_prefix(inline, marker.split("<title>", 1)[0])
             selected.insert(0, inline)
-        first = next_nonempty_text(selected, 0)
-        title_match = re.match(r"<(?:title|b|a)>(.*)", first)
+        title_match = next(
+            (
+                match
+                for item in selected
+                if (match := re.match(r"<(?:title|b|a)>(.*)", text_of(item).strip()))
+            ),
+            None,
+        )
         button_match = BUTTON_RE.search(marker.rstrip("\\"))
         title = title_match.group(1).strip() if title_match else ""
-        button = button_match.group(1).strip().rstrip("\\") if button_match else title
+        if button_match:
+            button = button_match.group(1).strip().rstrip("\\")
+        else:
+            button = marker.split("BEGIN downloadable content", 1)[1].strip(" \\.:")
+            button = button or title
         if not title:
             title = button
         if title and selected:
@@ -316,8 +388,12 @@ def download_sections(path):
 def clean_download_nodes(nodes):
     cleaned = []
     in_note = False
+    pending_page_break = False
     for node in nodes:
         value = text_of(node).strip()
+        if PAGE_BREAK_MARKER_RE.match(value):
+            pending_page_break = True
+            continue
         if value.startswith("\\qqID:") or value.startswith("\\qqPSM:"):
             in_note = not NOTE_END_RE.search(value)
             continue
@@ -331,9 +407,7 @@ def clean_download_nodes(nodes):
                 continue
             in_note = False
         if value.startswith("\\qqINSERT"):
-            marker = re.match(r"^\\qqINSERT:?\s+(.*)$", value)
-            image_name = PureWindowsPath(marker.group(1).strip()).stem if marker else ""
-            if not image_name or not (ROOT / "assets" / "images" / f"{image_name}.png").exists():
+            if image_for_marker(value) is None:
                 continue
         if value.startswith("\\qq") and not value.startswith("\\qqINSERT"):
             continue
@@ -342,6 +416,14 @@ def clean_download_nodes(nodes):
         match = PRODUCTION_PREFIX.match(clone_text)
         if match:
             remove_prefix(clone, match.group(0))
+        if pending_page_break and clone.tag == qn("w:p"):
+            paragraph_properties = clone.find("w:pPr", NS)
+            if paragraph_properties is None:
+                paragraph_properties = etree.Element(qn("w:pPr"))
+                clone.insert(0, paragraph_properties)
+            if paragraph_properties.find("w:pageBreakBefore", NS) is None:
+                paragraph_properties.append(etree.Element(qn("w:pageBreakBefore")))
+            pending_page_break = False
         if text_of(clone).strip() or clone.tag == qn("w:tbl"):
             cleaned.append(clone)
     return cleaned
@@ -389,8 +471,10 @@ def download_specs(source):
     return results
 
 
-def download_manifest(source):
-    return [(label, filename) for _section, label, filename in download_specs(source)]
+def download_manifest(source, sim_number=None):
+    results = [(label, filename) for _section, label, filename in download_specs(source)]
+    results.extend(ADDITIONAL_DOWNLOADS.get(sim_number, ()))
+    return results
 
 
 def write_downloads(source, sim_number):
@@ -409,21 +493,34 @@ def write_downloads(source, sim_number):
     ]
     packaged_supporting = []
     for path in supporting:
+        output_name = SUPPORTING_OUTPUT_NAMES.get(path.name, path.name)
         if path.suffix.lower() == ".docx":
-            packaged = output_dir / path.name
+            packaged = output_dir / output_name
             copy2(path, packaged)
             stamp_footer(packaged)
             packaged_supporting.append(packaged)
+        elif output_name != path.name:
+            packaged = output_dir / output_name
+            if not packaged.exists():
+                copy2(path, packaged)
+            packaged_supporting.append(packaged)
         else:
             packaged_supporting.append(path)
-    if results or supporting:
+    additional = [
+        (label, filename)
+        for label, filename in ADDITIONAL_DOWNLOADS.get(sim_number, ())
+        if (output_dir / filename).exists()
+    ]
+    if results or supporting or additional:
         zip_path = output_dir / "all-instructor-downloads.zip"
         with ZipFile(zip_path, "w", ZIP_DEFLATED) as archive:
             for _label, filename in results:
                 archive.write(output_dir / filename, filename)
+            for _label, filename in additional:
+                archive.write(output_dir / filename, filename)
             for path in packaged_supporting:
                 archive.write(path, path.name)
-    return results
+    return results + additional
 
 
 def cell_html(cell, relationships, styles):
@@ -465,8 +562,11 @@ def image_for_marker(value):
     if not marker or not marker.group(1).strip():
         return None
     stem = PureWindowsPath(marker.group(1).strip()).stem
-    candidate = ROOT / "assets" / "images" / f"{stem}.png"
-    return candidate if candidate.exists() else None
+    for suffix in (".png", ".jpg", ".jpeg"):
+        candidate = ROOT / "assets" / "images" / f"{stem}{suffix}"
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def main_content(path):
@@ -476,14 +576,19 @@ def main_content(path):
     in_download = False
     in_note = False
     active_list = None
+    inline_numbered_active = False
+    sim_match = SIM_RE.match(path.name)
+    sim_number = int(sim_match.group(1)) if sim_match else None
+    inline_numbered_items = INLINE_NUMBERED_ITEMS.get(sim_number, frozenset())
 
     def close_list():
-        nonlocal active_list
+        nonlocal active_list, inline_numbered_active
         if active_list:
             output.append(f"</{active_list}>")
             active_list = None
+        inline_numbered_active = False
 
-    for node in list(body):
+    for node in body_blocks(body):
         value = text_of(node).strip()
         value = re.sub(r"^(?:PHOTO HERE\s*)+", "", value).strip()
         if BEGIN_RE.search(value):
@@ -494,7 +599,13 @@ def main_content(path):
         if in_download:
             if value.startswith("\\qqEND downloadable content"):
                 in_download = False
-            continue
+                continue
+            # Supporting-file button markers sometimes omit an END marker.
+            # A top-level manuscript heading is an unambiguous return to the
+            # web-page content; downloadable sections use <title> headings.
+            if not value.startswith("<a>"):
+                continue
+            in_download = False
         if value.startswith("\\qqID:") or value.startswith("\\qqPSM:"):
             in_note = not NOTE_END_RE.search(value)
             continue
@@ -529,6 +640,8 @@ def main_content(path):
         if tag_name in ("cn", "ct"):
             continue
         html_tag = HEADING_TAGS.get(tag_name, "p")
+        if clean in FORCED_TOP_LEVEL_HEADINGS.get(sim_number, frozenset()):
+            html_tag = "h2"
         if html_tag.startswith("h"):
             close_list()
             rendered = inline_html(clean_node, relationships, styles)
@@ -538,6 +651,17 @@ def main_content(path):
                 active_list, list_class = list_config
                 output.append(f'<{active_list} class="manuscript-list {list_class}">')
             continue
+        if html_tag == "p" and clean in inline_numbered_items:
+            if not inline_numbered_active:
+                close_list()
+                active_list = "ol"
+                inline_numbered_active = True
+                output.append('<ol class="manuscript-list numbered-notes-list">')
+            rendered = inline_html(clean_node, relationships, styles)
+            output.append(f"<li data-manuscript-block>{rendered}</li>")
+            continue
+        if inline_numbered_active:
+            close_list()
         if active_list and html_tag == "p":
             number_match = SOURCE_LIST_NUMBER_RE.match(clean)
             if number_match:
@@ -554,14 +678,28 @@ def main_content(path):
         close_list()
         css = ' class="figure-caption"' if tag_name == "fc" else ""
         rendered = inline_html(clean_node, relationships, styles)
+        for source_text, replacement_text in PAGE_TEXT_REPLACEMENTS.get(
+            sim_number, {}
+        ).items():
+            rendered = rendered.replace(source_text, replacement_text)
+        for url in SIMULATION_LINKS.get(sim_number, ()):
+            escaped_url = escape(url)
+            if url in rendered and f'href="{escaped_url}"' not in rendered:
+                rendered = rendered.replace(
+                    url,
+                    f'<a href="{escaped_url}" target="_blank" rel="noopener noreferrer">{escaped_url}</a>',
+                )
         output.append(f"<{html_tag}{css} data-manuscript-block>{rendered}</{html_tag}>")
     close_list()
     return output
 
 
 def doc_title(path, fallback):
-    for paragraph in Document(path).paragraphs:
-        value = paragraph.text.strip()
+    _root, body = body_children(path)
+    for paragraph in body_blocks(body):
+        if paragraph.tag != qn("w:p"):
+            continue
+        value = text_of(paragraph).strip()
         if value.startswith("<ct>"):
             title = re.sub(r"^Simulation \d+:?\s*", "", value.removeprefix("<ct>"))
             return title or fallback
@@ -575,6 +713,47 @@ def page_shell(title, kicker, content):
 <body data-manuscript><header class="lesson-header"><p class="kicker">{escape(kicker)}</p><h1>{escape(title)}</h1></header>
 <main class="page">{content}</main></body></html>
 '''
+
+
+def promote_existing_page_sections(page, sim_number):
+    """Promote configured nested headings into their own generated cards."""
+    rendered = page.read_text(encoding="utf-8")
+    updated = rendered
+    for heading in FORCED_TOP_LEVEL_HEADINGS.get(sim_number, frozenset()):
+        for source_tag in ("h3", "h4", "h5"):
+            needle = f'<{source_tag} data-manuscript-block>{escape(heading)}</{source_tag}>'
+            if needle not in updated:
+                continue
+            replacement = (
+                '</section><section class="content-card">'
+                f'<h2 data-manuscript-block>{escape(heading)}</h2>'
+            )
+            updated = updated.replace(needle, replacement, 1)
+            break
+    if updated != rendered:
+        page.write_text(updated, encoding="utf-8")
+
+
+def update_existing_supporting_links(page, sim_number):
+    """Align generated page links with renamed packaged supporting files."""
+    rendered = page.read_text(encoding="utf-8")
+    updated = rendered
+    for source_name in SUPPORTING_RESOURCES.get(sim_number, ()):
+        output_name = SUPPORTING_OUTPUT_NAMES.get(source_name)
+        if not output_name:
+            continue
+        target = f"../assets/downloads/simulation-{sim_number}/{output_name}"
+        updated = updated.replace(f"../assets/Manuscripts/{source_name}", target)
+        updated = updated.replace(
+            f"../assets/downloads/simulation-{sim_number}/{source_name}", target
+        )
+    for legacy_name, output_name in LEGACY_DOWNLOAD_NAMES.get(sim_number, {}).items():
+        updated = updated.replace(
+            f"../assets/downloads/simulation-{sim_number}/{legacy_name}",
+            f"../assets/downloads/simulation-{sim_number}/{output_name}",
+        )
+    if updated != rendered:
+        page.write_text(updated, encoding="utf-8")
 
 
 def build_manuscript_page(source, number, fallback_title, write_download_assets=True):
@@ -592,7 +771,7 @@ def build_manuscript_page(source, number, fallback_title, write_download_assets=
     downloads = (
         write_downloads(source, number)
         if write_download_assets
-        else download_manifest(source)
+        else download_manifest(source, number)
     )
     supporting = [
         filename
@@ -606,9 +785,10 @@ def build_manuscript_page(source, number, fallback_title, write_download_assets=
         for filename in supporting:
             extension = Path(filename).suffix.removeprefix(".").upper()
             label = re.sub(r"^L1715_Sim\d{2}[_ ]*", "", Path(filename).stem).replace("_", " ")
+            output_filename = SUPPORTING_OUTPUT_NAMES.get(filename, filename)
             href = (
-                f"../assets/downloads/simulation-{number}/{filename}"
-                if extension == "DOCX"
+                f"../assets/downloads/simulation-{number}/{output_filename}"
+                if extension == "DOCX" or output_filename != filename
                 else f"../assets/Manuscripts/{filename}"
             )
             links.append(
@@ -617,10 +797,10 @@ def build_manuscript_page(source, number, fallback_title, write_download_assets=
                 f'<small>Supporting instructor resource</small></span><span class="download-arrow" aria-hidden="true">&darr;</span></a>'
             )
         cards.append('<section class="content-card"><h2>Instructor Downloads</h2><div class="download-grid activity-grid">' + "".join(links) + "</div></section>")
-    if number == 9:
-        cards.insert(0, '<section class="content-card tint"><h2>Instructor Manuscript Status</h2><p>This is a partial instructor manuscript.</p></section>')
     page = PAGES / f"simulation-{number}.html"
     page.write_text(page_shell(title, f"Simulation {number}", "".join(cards)), encoding="utf-8")
+    promote_existing_page_sections(page, number)
+    update_existing_supporting_links(page, number)
     return title, len(downloads)
 
 

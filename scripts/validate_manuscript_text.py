@@ -19,6 +19,7 @@ from build_instructor_version import (
     ROOT,
     SIM_RE,
     clean_download_nodes,
+    body_blocks,
     body_children,
     document_formatting,
     download_sections,
@@ -132,7 +133,7 @@ def source_format_blocks(path):
     results = []
     in_download = False
     in_note = False
-    for node in list(body):
+    for node in body_blocks(body):
         value = text_of(node).strip()
         value = re.sub(r"^(?:PHOTO HERE\s*)+", "", value).strip()
         if BEGIN_RE.search(value):
@@ -254,7 +255,7 @@ def validate_page(source, page):
     _root, body = body_children(source)
     source_headings = []
     in_download = False
-    for node in list(body):
+    for node in body_blocks(body):
         value = text_of(node).strip()
         if BEGIN_RE.search(value):
             in_download = True
