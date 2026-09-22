@@ -67,6 +67,14 @@ PAGE_TEXT_REPLACEMENTS = {
         "other AT.’": "other AT.",
     },
 }
+SECTION_CONTENT_ADDITIONS = {
+    17: {
+        "HCP Prebrief": (
+            "Complete the above activities and arrive at class ready to discuss and demonstrate. There is no preparation other than the activities. This simulation is called a table-top simulation. This means that each step will be discussed, practiced, and implemented gradually and as a group. In this learning community, we value differences and expect you to foster a safe space to share your unique perspectives in a respectful manner to enrich the classroom discussions. The instructor will also create a space that is safe for unique, respectful, enriching discussions, and viewpoints.",
+            "Because of the unique nature of this simulation, we will not use the safety phrase “Time-out, time-out.” If during this simulation experience, you need to leave the simulation for a break, you may leave the room at any time. Please give the instructor a “thumbs up” as you leave to be sure the instructor knows you are okay. If you do not provide “thumbs up”, someone will follow you out of the classroom to verify you do not need assistance. If you do not return",
+        ),
+    },
+}
 FORCED_TOP_LEVEL_HEADINGS = {
     22: frozenset({"Standardized Patient Information"}),
 }
@@ -891,6 +899,18 @@ def update_existing_supporting_links(page, sim_number):
 def build_manuscript_page(source, number, fallback_title, write_download_assets=True):
     title = doc_title(source, fallback_title)
     blocks = main_content(source)
+    for heading, paragraphs in SECTION_CONTENT_ADDITIONS.get(number, {}).items():
+        heading_block = f"<h2 data-manuscript-block>{escape(heading)}</h2>"
+        try:
+            heading_index = blocks.index(heading_block)
+        except ValueError as error:
+            raise ValueError(
+                f"Simulation {number} is missing the {heading!r} section"
+            ) from error
+        blocks[heading_index + 1 : heading_index + 1] = [
+            f"<p data-manuscript-block>{escape(paragraph)}</p>"
+            for paragraph in paragraphs
+        ]
     cards = []
     current = []
     for block in blocks:
