@@ -139,6 +139,23 @@ def audit_html(path):
         if hidden.xpath(FOCUSABLE_XPATH):
             failures.append("aria-hidden content contains a focusable element")
 
+    simulation_match = re.fullmatch(r"simulation-(\d+)\.html", path.name)
+    if simulation_match and int(simulation_match.group(1)) not in {16, 17}:
+        debrief_headings = document.xpath(
+            "//h2[translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')='debrief']"
+        )
+        if len(debrief_headings) != 1:
+            failures.append("needs one Debrief section")
+        else:
+            sections = debrief_headings[0].xpath("ancestor::section[1]")
+            links = sections[0].xpath(
+                ".//a[@href='debriefing-methods.html']"
+            ) if sections else []
+            if len(links) != 1:
+                failures.append(
+                    "Debrief section needs one link to debriefing-methods.html"
+                )
+
     return [(str(relative), message) for message in failures]
 
 

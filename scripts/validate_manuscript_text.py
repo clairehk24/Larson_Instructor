@@ -56,6 +56,7 @@ def html_format_blocks(value):
 
     def child_flags(element, inherited):
         flags = set(inherited)
+        classes = set((element.get("class") or "").split())
         if element.tag in {"strong", "b"}:
             flags.add("bold")
         if element.tag in {"em", "i"}:
@@ -68,9 +69,12 @@ def html_format_blocks(value):
             flags.add("superscript")
         if element.tag == "sub":
             flags.add("subscript")
-        if element.tag == "a" and element.get("href"):
+        if (
+            element.tag == "a"
+            and element.get("href")
+            and "manuscript-instruction-link" not in classes
+        ):
             flags.add("link")
-        classes = set((element.get("class") or "").split())
         if "manuscript-caps" in classes:
             flags.add("caps")
         if "manuscript-small-caps" in classes:

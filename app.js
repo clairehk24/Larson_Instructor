@@ -47,8 +47,10 @@
     }
   }
 
-  function iconMarkup() {
-    return `<svg aria-hidden="true" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg>`;
+  function iconMarkup(isComplete = false) {
+    return isComplete
+      ? `<svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/></svg>`
+      : `<svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg>`;
   }
 
   function renderNavigation() {
@@ -150,6 +152,7 @@
       link.classList.toggle("is-complete", isComplete);
       const status = link.querySelector(".nav-status");
       status.setAttribute("aria-label", isComplete ? "Complete" : "Not complete");
+      status.innerHTML = iconMarkup(isComplete);
     });
 
     const count = allItems.filter(item => completed.has(item.id)).length;

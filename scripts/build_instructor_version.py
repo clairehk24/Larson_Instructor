@@ -10,6 +10,8 @@ from shutil import copy2
 import sys
 from zipfile import ZIP_DEFLATED, ZipFile
 
+from docx import Document
+from docx.enum.text import WD_BREAK
 from docx.oxml.ns import qn
 from lxml import etree
 
@@ -107,6 +109,54 @@ LEGACY_DOWNLOAD_NAMES = {
 }
 ADDITIONAL_DOWNLOADS = {
     15: (("Rubric: Mountain Biking", "Rubric-mountain-biking.docx"),),
+}
+
+# Composite proctor packets requested by the production notes in each manuscript.
+# Component filenames refer to the individual downloads generated immediately
+# before the packet is assembled.
+PROCTOR_PACKETS = {
+    1: (
+        ("Information for Proctor for Grade I Sprain", "information-for-proctor-for-grade-i-sprain.docx", ("rubric.docx", "situation-and-setting.docx", "instructions-for-sp-1.docx", "instructions-for-embedded-personnel.docx")),
+        ("Information for Proctor for Grade II Sprain", "information-for-proctor-for-grade-ii-sprain.docx", ("rubric.docx", "situation-and-setting.docx", "instructions-for-sp-2.docx", "instructions-for-embedded-personnel.docx")),
+    ),
+    2: (("Information for Proctor for Exercise Illness", "information-for-proctor-for-exercise-illness.docx", ("rubric.docx", "situation-and-setting.docx", "instructions-for-standardized-patient.docx")),),
+    3: (("Information for Proctor", "information-for-proctor.docx", ("rubric.docx", "instructions-for-football-sp.docx", "instructions-for-swimming-sp.docx", "instructions-for-fan-in-the-stands-sp.docx", "instructions-for-coach-heart-attack-in-the-stairwell-sp.docx", "instructions-for-football-proctor.docx", "instructions-for-swimming-proctor.docx", "instructions-for-fan-in-the-stands-proctor.docx", "instructions-for-coach-in-the-stairwell-proctor.docx", "instructions-for-ems-all-situations.docx")),),
+    4: (("Information for Proctor", "information-for-proctor.docx", ("situation-and-setting.docx", "rubric.docx")),),
+    5: (("Information for Proctor", "information-for-proctor.docx", ("situation-and-setting.docx", "rubric.docx")),),
+    6: (
+        ("Information for Proctor for Asthma SP", "information-for-proctor-for-asthma-sp.docx", ("rubric.docx", "situation-and-setting.docx", "instructions-for-sp-asthma.docx")),
+        ("Information for Proctor for Arrhythmia SP", "information-for-proctor-for-arrhythmia-sp.docx", ("rubric.docx", "situation-and-setting.docx", "instructions-for-sp-arrhythmia.docx")),
+        ("Information for Proctor for Anxiety SP", "information-for-proctor-for-anxiety-sp.docx", ("rubric.docx", "situation-and-setting.docx", "instructions-for-sp-anxiety.docx")),
+        ("Information for Proctor for Anaphylaxis SP", "information-for-proctor-for-anaphylaxis-sp.docx", ("rubric.docx", "situation-and-setting.docx", "instructions-for-sp-anaphylaxis.docx")),
+    ),
+    7: (("Information for Proctor", "information-for-proctor.docx", ("rubric.docx", "situation-and-setting.docx", "instructions-for-ep-coach.docx")),),
+    8: (
+        ("Information for Proctor for SP 1 Spleen", "information-for-proctor-for-sp-1-spleen.docx", ("rubric.docx", "situation-and-setting.docx", "instructions-for-sp-1-spleen.docx")),
+        ("Information for Proctor for SP 2 Liver", "information-for-proctor-for-sp-2-liver.docx", ("rubric.docx", "situation-and-setting.docx", "instructions-for-sp-2-liver.docx")),
+    ),
+    9: (("Information for Proctor", "information-for-proctor.docx", ("rubric.docx", "situation-and-setting.docx", "embedded-personnel-coach.docx", "athlete-summary-sickle-cell.docx", "athlete-summary-asthma.docx", "athlete-summary-epilepsy.docx")),),
+    10: (("Information for Proctor", "information-for-proctor.docx", ("situation-and-setting.docx", "rubric.docx", "instructions-for-sp-1-hotel-room-gi.docx", "instructions-for-sp-2-sideline-pool-deck.docx", "instructions-for-sp-3-athletic-training-clinic-dance-department-college.docx", "instructions-for-sp-4-athletic-training-clinic-high-school.docx", "instructions-for-sp-5-track-sideline.docx")),),
+    12: tuple(
+        (f"Information for Proctor for Station {station}", f"information-for-proctor-for-station-{station}.docx", ("rubric.docx", "situation-and-setting.docx", f"sp-information-for-station-{station}.docx"))
+        for station in range(1, 7)
+    ),
+    13: (("Information for Proctor", "information-for-proctor.docx", ("instructions-for-sp.docx", "rubric.docx", "situation-and-setting.docx")),),
+    15: (("Information for Proctor", "information-for-proctor.docx", ("situation-and-setting.docx", "instructions-for-hockey-sp.docx", "instructions-for-unconscious-basketball-sp-and-embedded-personnel-ep.docx", "instructions-for-mountain-biking-sp-and-ep.docx", "instructions-for-football-sp.docx", "rubric-hockey.docx", "rubric-unconscious-basketball.docx", "Rubric-mountain-biking.docx", "rubric-football.docx")),),
+    18: (("Information for Proctor", "information-for-proctor.docx", ("situation-and-setting.docx", "instructions-for-sp.docx", "instructions-for-ep-proctor.docx", "instructions-for-ep-ems.docx", "instructions-for-ep-parent.docx", "event-medical-form.docx", "rubric.docx")),),
+    19: (("Information for Proctor", "information-for-proctor.docx", ("instructions-for-sp.docx", "situation-and-setting.docx", "rubric.docx")),),
+    20: (("Information for Proctor", "information-for-proctor.docx", ("situation-and-setting.docx", "instructions-for-sp-patient-a.docx", "instructions-for-sp-patient-b.docx", "rubric.docx")),),
+    21: (("Information for Proctor", "information-for-proctor.docx", ("situation-and-setting.docx", "instructions-for-sp-patient-a.docx", "instructions-for-sp-patient-b.docx", "rubric.docx")),),
+    22: (("Information for Proctor", "information-for-proctor.docx", ("situation-and-setting.docx", "instructions-for-ep.docx", "rubric.docx")),),
+    23: (("Information for Proctor", "information-for-proctor.docx", ("situation-and-setting.docx", "instructions-for-sp-1-and-2.docx", "rubric-ehs-station-1.docx", "rubric-ehs-station-2.docx")),),
+    24: (("Information for Proctor", "information-for-proctor.docx", ("situation-and-setting.docx", "instructions-for-sp.docx", "rubric.docx")),),
+    25: (("Information for Proctor", "information-for-proctor.docx", ("situation-and-setting.docx", "instructions-for-sp.docx", "rubric.docx")),),
+    26: (("Information for Proctor", "information-for-proctor.docx", ("situation-and-setting.docx", "instructions-for-sp.docx", "rubric.docx")),),
+    27: (("Information for Proctor", "information-for-proctor.docx", ("instructions-for-all-sps.docx", "instructions-for-ep.docx", "situation-and-setting.docx", "rubric.docx")),),
+    28: (("Information for Proctor", "information-for-proctor.docx", ("instructions-for-all-sps.docx", "instructions-for-all-eps.docx", "situation-and-setting.docx", "rubric.docx")),),
+    29: (("Information for Proctor", "information-for-proctor.docx", ("instructions-for-all-sps.docx", "instructions-for-ep.docx", "rubric.docx")),),
+    30: (("Information for Proctor", "information-for-proctor.docx", ("instructions-for-sp.docx", "situation-and-setting.docx", "rubric.docx")),),
+    31: (("Information for Proctor", "information-for-proctor.docx", ("situation-and-setting.docx", "instructions-for-all-eps.docx", "rubric.docx")),),
+    32: (("Information for Proctor", "information-for-proctor.docx", ("situation-and-setting.docx", "instructions-for-sp.docx", "rubric.docx")),),
 }
 
 
@@ -473,7 +523,56 @@ def download_specs(source):
 
 def download_manifest(source, sim_number=None):
     results = [(label, filename) for _section, label, filename in download_specs(source)]
+    results.extend(
+        (label, filename)
+        for label, filename, _components in PROCTOR_PACKETS.get(sim_number, ())
+    )
     results.extend(ADDITIONAL_DOWNLOADS.get(sim_number, ()))
+    return results
+
+
+def write_composite_docx(source, output, title, component_paths):
+    """Combine generated downloads into one page-separated proctor packet."""
+    document = Document(source)
+    body = document._element.body
+    section_properties = body.find(qn("w:sectPr"))
+    for child in list(body):
+        if child is not section_properties:
+            body.remove(child)
+
+    title_paragraph = document.add_paragraph(title)
+
+    for component_index, component_path in enumerate(component_paths):
+        if not component_path.exists():
+            raise FileNotFoundError(
+                f"Missing proctor-packet component: {component_path.relative_to(ROOT)}"
+            )
+        if component_index:
+            separator = document.add_paragraph()
+            separator.add_run().add_break(WD_BREAK.PAGE)
+        component = Document(component_path)
+        for child in component._element.body:
+            if child.tag == qn("w:sectPr"):
+                continue
+            insertion_index = len(body) - 1 if section_properties is not None else len(body)
+            body.insert(insertion_index, deepcopy(child))
+
+    document.core_properties.title = title
+    document.save(output)
+    finalize_document(output)
+
+
+def write_proctor_packets(source, sim_number, output_dir):
+    results = []
+    for label, filename, components in PROCTOR_PACKETS.get(sim_number, ()):
+        output = output_dir / filename
+        write_composite_docx(
+            source,
+            output,
+            label,
+            [output_dir / component for component in components],
+        )
+        results.append((label, filename))
     return results
 
 
@@ -511,16 +610,19 @@ def write_downloads(source, sim_number):
         for label, filename in ADDITIONAL_DOWNLOADS.get(sim_number, ())
         if (output_dir / filename).exists()
     ]
-    if results or supporting or additional:
+    proctor_packets = write_proctor_packets(source, sim_number, output_dir)
+    if results or supporting or additional or proctor_packets:
         zip_path = output_dir / "all-instructor-downloads.zip"
         with ZipFile(zip_path, "w", ZIP_DEFLATED) as archive:
             for _label, filename in results:
+                archive.write(output_dir / filename, filename)
+            for _label, filename in proctor_packets:
                 archive.write(output_dir / filename, filename)
             for _label, filename in additional:
                 archive.write(output_dir / filename, filename)
             for path in packaged_supporting:
                 archive.write(path, path.name)
-    return results + additional
+    return results + proctor_packets + additional
 
 
 def cell_html(cell, relationships, styles):
@@ -715,6 +817,36 @@ def page_shell(title, kicker, content):
 '''
 
 
+def link_debriefing_methods(rendered):
+    """Apply the manuscript's production link instruction within the Debrief card."""
+    section_pattern = re.compile(
+        r'(<section\b[^>]*>\s*<h2\b[^>]*>Debrief</h2>)(.*?)(</section>)',
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    def link_reference(match):
+        body = match.group(2)
+        if 'href="debriefing-methods.html"' in body:
+            return match.group(0)
+        reference_pattern = re.compile(r"\bdebriefing methods?\b", re.IGNORECASE)
+        linked_body, count = reference_pattern.subn(
+            lambda reference: (
+                '<a class="manuscript-instruction-link" '
+                f'href="debriefing-methods.html">{reference.group(0)}</a>'
+            ),
+            body,
+            count=1,
+        )
+        if count == 0:
+            return match.group(0)
+        return match.group(1) + linked_body + match.group(3)
+
+    updated, count = section_pattern.subn(link_reference, rendered, count=1)
+    if count != 1:
+        raise ValueError("Simulation page is missing its Debrief section")
+    return updated
+
+
 def promote_existing_page_sections(page, sim_number):
     """Promote configured nested headings into their own generated cards."""
     rendered = page.read_text(encoding="utf-8")
@@ -798,7 +930,8 @@ def build_manuscript_page(source, number, fallback_title, write_download_assets=
             )
         cards.append('<section class="content-card"><h2>Instructor Downloads</h2><div class="download-grid activity-grid">' + "".join(links) + "</div></section>")
     page = PAGES / f"simulation-{number}.html"
-    page.write_text(page_shell(title, f"Simulation {number}", "".join(cards)), encoding="utf-8")
+    rendered = page_shell(title, f"Simulation {number}", "".join(cards))
+    page.write_text(link_debriefing_methods(rendered), encoding="utf-8")
     promote_existing_page_sections(page, number)
     update_existing_supporting_links(page, number)
     return title, len(downloads)
