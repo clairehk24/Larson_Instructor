@@ -75,6 +75,21 @@ SECTION_CONTENT_ADDITIONS = {
         ),
     },
 }
+WEB_EXCLUDED_SECTIONS = {
+    6: frozenset({"Rubric", "Simulation Situation"}),
+    8: frozenset({"Rubric"}),
+    9: frozenset({"Rubric"}),
+    20: frozenset({"Rubric"}),
+    21: frozenset({"Rubric"}),
+    22: frozenset({"Rubric"}),
+    25: frozenset({"Simulation Situation"}),
+    26: frozenset({"Simulation Situation"}),
+    27: frozenset({"Simulation Situation"}),
+    28: frozenset({"Simulation Situation"}),
+    29: frozenset({"Simulation Situation"}),
+    30: frozenset({"Simulation Situation"}),
+    32: frozenset({"Rubric", "Simulation Situation"}),
+}
 FORCED_TOP_LEVEL_HEADINGS = {
     22: frozenset({"Standardized Patient Information"}),
 }
@@ -87,6 +102,7 @@ PAGE_BREAK_MARKER_RE = re.compile(r"^\\qqStart new page", re.IGNORECASE)
 TITLE_OVERRIDES = {
     5: "Special Test Roulette: Upper Extremity",
     9: "Coach Education",
+    30: "Breaking Bad News",
 }
 SUPPORTING_RESOURCES = {
     2: (
@@ -915,11 +931,15 @@ def build_manuscript_page(source, number, fallback_title, write_download_assets=
     current = []
     for block in blocks:
         if block.startswith("<h2") and current:
-            cards.append('<section class="content-card">' + "".join(current) + "</section>")
+            heading = re.sub(r"<[^>]+>", "", current[0])
+            if heading not in WEB_EXCLUDED_SECTIONS.get(number, frozenset()):
+                cards.append('<section class="content-card">' + "".join(current) + "</section>")
             current = []
         current.append(block)
     if current:
-        cards.append('<section class="content-card">' + "".join(current) + "</section>")
+        heading = re.sub(r"<[^>]+>", "", current[0])
+        if heading not in WEB_EXCLUDED_SECTIONS.get(number, frozenset()):
+            cards.append('<section class="content-card">' + "".join(current) + "</section>")
     downloads = (
         write_downloads(source, number)
         if write_download_assets
